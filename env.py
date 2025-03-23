@@ -1,3 +1,4 @@
+import time
 from typing import Optional
 from irsim import EnvBase
 from gym import spaces
@@ -41,7 +42,6 @@ class VOEnv(EnvBase):
                     action[i] = np.zeros((2, 1))
                     continue
                 differential_action_list.append(self.omni2differential(action[i], robot))
-
         super().step(differential_action_list, action_id)
         for vo_robot in self.vo_robots:
             vo_robot.step()

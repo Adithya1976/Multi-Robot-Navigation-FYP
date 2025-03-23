@@ -1,7 +1,6 @@
 
 from cProfile import label
 from typing import List, Tuple
-import irsim
 from irsim.env import EnvBase
 import _tkinter
 from irsim.world.robots.robot_diff import RobotDiff
