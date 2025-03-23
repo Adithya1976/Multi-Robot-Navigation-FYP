@@ -169,3 +169,12 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# virtual environment
+.venv
+
+animation_buffer
+
+animation
+
+model_save
