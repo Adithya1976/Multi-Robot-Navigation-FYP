@@ -441,6 +441,9 @@ class ObjectBase:
         """
         Check if the object is in collision with others.
         """
+        if self.arrive:
+            return
+
         collision_flags = []
 
         self.collision_obj = []

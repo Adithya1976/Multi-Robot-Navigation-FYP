@@ -115,7 +115,7 @@ class multi_ppo:
 
         # Set up optimizers for policy and value function
         self.pi_optimizer = Adam(list(self.ac.pi.parameters()) + list(self.ac.dynamic_input_model.parameters()), lr=pi_lr)
-        self.vf_optimizer = Adam(list(self.ac.pi.parameters()) + list(self.ac.dynamic_input_model.parameters()), lr=vf_lr)
+        self.vf_optimizer = Adam(list(self.ac.v.parameters()) + list(self.ac.dynamic_input_model.parameters()), lr=vf_lr)
 
         if con_train:
             check_point = torch.load(load_fname)
@@ -160,7 +160,7 @@ class multi_ppo:
 
         for epoch in tqdm(range(self.epoch), desc='Training'):
 
-            save_anim = self.render and (epoch % self.render_freq == 0 or epoch == self.epoch)
+            save_anim = self.render and (epoch % self.render_freq == 0 or epoch == self.epoch - 1)
             if save_anim:
                 self.env = self.env_handler.get_save_ani_env()
             else:
@@ -248,7 +248,7 @@ class multi_ppo:
                     del self.env_handler.save_ani_env
                     self.delete_animation_buffer("animation_buffer")
 
-            if (epoch % self.save_freq == 0) or (epoch == self.epoch) and epoch != 0:
+            if (epoch % self.save_freq == 0) or (epoch == self.epoch - 1) and epoch != 0:
                 self.save_model(epoch) 
 
                 # if self.save_result:
