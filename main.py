@@ -3,6 +3,10 @@ import sys
 import gym
 import pickle
 import shutil
+from dynamic_input_models.deep_set import DeepSet
+from dynamic_input_models.dynamic_input_handler import DynamicInputModel
+from dynamic_input_models.rnn import BiGRU, LSTM, BiLSTM, GRU, BiGRU
+from dynamic_input_models.set_transformer import SetTransformer
 import irsim
 import argparse
 from torch import nn
@@ -11,6 +15,12 @@ from env import VOEnv
 from env_handler import EnvHandler
 from multi_ppo_dense import multi_ppo
 from model import ActorCritic
+import matplotlib
+matplotlib.use('Agg')
+import torch
+os.environ['TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD'] = '1'
+
+# torch.serialization.add_safe_globals([ActorCritic, DynamicInputModel, BiGRU, LSTM, BiLSTM, GRU, SetTransformer, DeepSet])
 
 # path set
 cur_path = Path(__file__).parent

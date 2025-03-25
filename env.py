@@ -12,13 +12,12 @@ from irsim.world.robots.robot_diff import RobotDiff
 class VOEnv(EnvBase):
     def __init__(self, world_name, **kwargs):
         super(VOEnv, self).__init__(world_name, **kwargs)
-        self.vo_robots = [VelocityObstacleRobot(robot, self.step_time) for robot in self.robot_list if robot.lidar is not None]
+        self.vo_robots = [VelocityObstacleRobot(robot, self.step_time) for robot in self.robot_list if robot.lidar_custom is not None]
         self.action_space = spaces.Box(low=np.array([-1, -1]), high=np.array([1, 1]), dtype=np.float32)
 
 
     def render(self, interval = 0.05, figure_kwargs=dict(), show_sensor = False,  **kwargs):
         kwargs['show_sensor'] = show_sensor
-        print("reached here")
         return super().render(interval, figure_kwargs, **kwargs)
 
     def reset(self, robot_id: Optional[int] = None):
@@ -30,22 +29,26 @@ class VOEnv(EnvBase):
             for vo_robot in self.vo_robots:
                 vo_robot.reset()
         else:
-            self.robot_list[robot_id].reset()
+            robot: RobotDiff = self.robot_list[robot_id]
+            robot.reset()
             self.vo_robots[robot_id].reset()
+            robot.check_status()
         return self.get_observation()
     
     def step(self, action = None, action_id=0):
         differential_action_list = []
         if action is not None:
             for i, robot in enumerate(self.robot_list):
-                if robot.arrive:
-                    action[i] = np.zeros((2, 1))
+                if robot.arrive or robot.collision:
+                    differential_action_list.append(np.zeros(2))
                     continue
                 differential_action_list.append(self.omni2differential(action[i], robot))
         super().step(differential_action_list, action_id)
         for vo_robot in self.vo_robots:
-            vo_robot.step()
-        return self.get_observation()
+            if not vo_robot.robot.arrive and not vo_robot.robot.collision:
+                vo_robot.step()
+        observations = self.get_observation()
+        return observations
 
     def omni2differential(self, vel_omni, robot: RobotDiff, tolerance=0.1, min_speed = 0.02):
         vel_max = robot.vel_max
@@ -55,7 +58,7 @@ class VOEnv(EnvBase):
         vel_radians = math.atan2(vel_omni[1], vel_omni[0])
         w_max = vel_max[1, 0]
         robot_radians = robot.state[2, 0]
-        diff_radians = vel_radians - robot_radians
+        diff_radians = robot_radians - vel_radians
 
         if diff_radians > math.pi:
             diff_radians -= 2 * math.pi
@@ -99,7 +102,7 @@ class VOEnv(EnvBase):
             pro_obs, _, min_collision_time = obs_list[i]
             
             velocity = pro_obs[:2]
-            desired_velocity = pro_obs[2:4]
+            desired_velocity = pro_obs[3:5]
 
             diff_dis_vel = np.linalg.norm(velocity - desired_velocity)
 
@@ -114,7 +117,7 @@ class VOEnv(EnvBase):
                 collision_reward = p7
             # else calculate rvo reward
             elif not robot.arrive:
-                if min_collision_time > 5: # if v belongs to vo
+                if min_collision_time > 5: # if v doesn't belong to vo
                     rvo_reward = p1 - p2*diff_dis_vel
                 elif min_collision_time > 0.1:
                     rvo_reward = p3 - p4*(1/(min_collision_time + p5))

@@ -41,6 +41,7 @@ class ActorCritic(nn.Module):
 
     def get_intermediate_representation(self, proprioceptive_observation, exteroceptive_observation, is_batch=True):
         if is_batch:
+                proprioceptive_observation = np.array(proprioceptive_observation)
                 proprioceptive_observation = torch.tensor(proprioceptive_observation).to(self.device, dtype=torch.float32)
         else:
             # convert a list of numpy arrays to a tensor

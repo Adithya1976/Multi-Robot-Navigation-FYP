@@ -5,17 +5,18 @@ import copy
 
 class VelocityObstacleRobot:
     def __init__(self, robot: RobotDiff, step_time = 0.1):
-        self.lidar_angles = np.linspace(robot.lidar.angle_min, robot.lidar.angle_max, robot.lidar.number)
-        self.lidar_angular_resolution = (robot.lidar.angle_max - robot.lidar.angle_min)/robot.lidar.number
-        self.lidar_number = robot.lidar.number
-        self.lidar_range_limit = robot.lidar.range_max
         self.robot = robot
+        self.lidar = self.robot.lidar_custom
+        self.lidar_angles = self.lidar.angle_list
+        self.lidar_angular_resolution = self.lidar.angle_inc
+        self.lidar_number = self.lidar.number
+        self.lidar_range_limit = self.lidar.range_max
         self.step_time = step_time
         self.previous_state = copy.deepcopy(robot.state)
         self.current_state = copy.deepcopy(robot.state)
         self.previous_scan = None
-        self.current_scan = copy.deepcopy(robot.get_lidar_scan()['ranges'])
-        self.jump_threshold = 0.1
+        self.current_scan = copy.deepcopy(self.lidar.get_scan()['ranges'])
+        self.jump_threshold = 0.2
         self.artificial_obstacle_limit = 4
         self.current_cluster_info = None
         self.previous_cluster_info = None
@@ -26,15 +27,15 @@ class VelocityObstacleRobot:
         self.previous_state = copy.deepcopy(self.current_state)
         self.current_state = copy.deepcopy(self.robot.state)
 
-        self.previous_scan = copy.deepcopy(self.current_scan) if self.previous_scan is not None else copy.deepcopy(self.robot.get_lidar_scan()['ranges'])
-        self.current_scan = copy.deepcopy(self.robot.get_lidar_scan()['ranges'])
+        self.previous_scan = copy.deepcopy(self.current_scan) if self.previous_scan is not None else copy.deepcopy(self.lidar.get_scan()['ranges'])
+        self.current_scan = copy.deepcopy(self.lidar.get_scan()['ranges'])
         
     
     def reset(self):
         self.previous_state = copy.deepcopy(self.robot.state)
         self.current_state = copy.deepcopy(self.robot.state)
         self.previous_scan = None
-        self.current_scan = copy.deepcopy(self.robot.get_lidar_scan()['ranges'])
+        self.current_scan = copy.deepcopy(self.lidar.get_scan()['ranges'])
     
     def generate_clusters(self, lidar_scan, robot_state):
         labelled_scan = [0] * self.lidar_number
@@ -80,7 +81,7 @@ class VelocityObstacleRobot:
         clusters = {}
         temp_list = []
         for i, label in enumerate(labelled_scan):
-            if label == 0 and i > 900 and has_split:
+            if label == 0 and i > self.lidar_number/2 and has_split:
                 temp_list.append(i)
             elif label != -1:
                 clusters.setdefault(label, []).append(i)
@@ -100,7 +101,7 @@ class VelocityObstacleRobot:
             else:
                 # For cyclic clusters, the label appears at both start and end.
                 # We assume the beams are consecutive on the circle so that the angular span is still (n-1)*0.2.
-                theta = (n - 1) * math.pi/180 * 0.2
+                theta = (n - 1) * self.lidar_angular_resolution
                 # We use the first and last beam distances (order in indices is from low index to high index)
                 d1 = lidar_scan[indices[0]]
                 d2 = lidar_scan[indices[-1]]
@@ -232,11 +233,17 @@ class VelocityObstacleRobot:
         return t
 
     def calculate_min_expected_collision_time(self, cluster_info, lidar_scan, cluster_velocity):
-        points = self.get_points_from_cluster(cluster_info, lidar_scan, [[0], [0], [0]])
+        points = self.get_points_from_cluster(cluster_info, lidar_scan, self.robot.state)
         min_t = np.inf
         for i in range(len(points)):
             point = points[i]
-            t = self.cal_exp_tim(point[0], point[1], cluster_velocity[0], cluster_velocity[1], self.robot.radius)
+            t = self.cal_exp_tim(
+                point[0] - self.robot.state[0, 0], 
+                point[1] - self.robot.state[1, 0],
+                cluster_velocity[0] - self.robot.velocity_xy[0, 0],
+                cluster_velocity[1] - self.robot.velocity_xy[1, 0],
+                self.robot.radius
+            )
             if t < min_t:
                 min_t = t
         return min_t
@@ -271,8 +278,15 @@ class VelocityObstacleRobot:
             cluster_velocity = np.array([x_transalation/self.step_time, y_transalation/self.step_time])
             self.cluster_velocity_mapping[cluster_id] = cluster_velocity
 
-            left_angle = self.lidar_angles[self.current_cluster_info[cluster_id]['indices'][1]]
-            right_angle = self.lidar_angles[self.current_cluster_info[cluster_id]['indices'][0]]
+            left_index = self.current_cluster_info[cluster_id]['indices'][1]
+            right_index = self.current_cluster_info[cluster_id]['indices'][0]
+
+            half_angle_left = math.asin(self.robot.radius/self.current_scan[left_index])
+            half_angle_right = math.asin(self.robot.radius/self.current_scan[right_index])
+
+            left_angle = self.robot.state[2, 0] + self.lidar_angles[left_index] + half_angle_left
+            right_angle = self.robot.state[2, 0] + self.lidar_angles[right_index] - half_angle_right
+
             left_ray = np.array([math.cos(left_angle), math.sin(left_angle)])
             right_ray = np.array([math.cos(right_angle), math.sin(right_angle)])
             
@@ -280,7 +294,7 @@ class VelocityObstacleRobot:
             expected_collision_time = self.calculate_min_expected_collision_time(self.current_cluster_info[cluster_id], self.current_scan, cluster_velocity)
             inverse_expected_collision_time = 1/(expected_collision_time + 0.2)
 
-            obstacle_velocity = self.robot.velocity.flatten() + cluster_velocity
+            obstacle_velocity = cluster_velocity
             obstacle_observation = np.array([obstacle_velocity[0], obstacle_velocity[1], 
                                     left_ray[0], left_ray[1], 
                                     right_ray[0], right_ray[1],
@@ -291,7 +305,7 @@ class VelocityObstacleRobot:
                 minimum_collision_time = expected_collision_time
         
         desired_velocity = self.calculate_desired_velocity()
-        proprioceptive_observation = np.array([self.robot.velocity[0][0], self.robot.velocity[1][0],
+        proprioceptive_observation = np.array([self.robot.velocity_xy[0][0], self.robot.velocity_xy[1][0],
                                     self.robot.state[2][0], desired_velocity[0],
                                     desired_velocity[1], self.robot.radius], dtype=np.float64)
         

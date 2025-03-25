@@ -1,3 +1,4 @@
+from copy import deepcopy
 import shapely
 import logging
 import itertools
@@ -11,7 +12,7 @@ from matplotlib import image
 from mpl_toolkits.mplot3d import Axes3D
 from dataclasses import dataclass
 from math import inf, pi, atan2, cos, sin
-from typing import Optional, Union
+from typing import List, Optional, Union
 from collections import deque
 from irsim.lib import Behavior, KinematicsFactory, GeometryFactory
 from irsim.global_param import world_param, env_param
@@ -240,7 +241,11 @@ class ObjectBase:
         self._init_goal = self._goal.copy()
 
         self._geometry = self.gf.step(self.state)
+        self.set_init_geometry(geometry=self._geometry)
         self.group = group
+
+        # external objects
+        self._external_objects: List[ObjectBase] = []
 
         # flag
         self.stop_flag = False
@@ -290,13 +295,17 @@ class ObjectBase:
         self.lidar = None
         if sensors is not None:
             self.sensors = [
-                sf.create_sensor(self._state[0:3], self._id, **sensor_kwargs)
+                sf.create_sensor(self._state[0:3], self._id, self._external_objects, **sensor_kwargs)
                 for sensor_kwargs in sensors
             ]
 
             self.lidar = [
                 sensor for sensor in self.sensors if sensor.sensor_type == "lidar2d"
-            ][0]
+            ][0] if any([sensor.sensor_type == "lidar2d" for sensor in self.sensors]) else None
+
+            self.lidar_custom = [
+                sensor for sensor in self.sensors if sensor.sensor_type == "lidar2d_custom"
+            ][0] if any([sensor.sensor_type == "lidar2d_custom" for sensor in self.sensors]) else None
         else:
             self.sensors = []
 
@@ -365,9 +374,9 @@ class ObjectBase:
             self._state = next_state
             self._velocity = behavior_vel
             self._geometry = self.gf.step(self.state)
+            self.check_status()
             self.sensor_step()
             self.post_process()
-            self.check_status()
             self.trajectory.append(self.state.copy())
             return next_state
 
@@ -375,7 +384,12 @@ class ObjectBase:
         """
         Update all sensors for the current state.
         """
-        [sensor.step(self.state[0:3]) for sensor in self.sensors]
+        if not self.arrive_flag and not self.collision_flag:
+            try:
+                [sensor.step(self.state[0:3]) for sensor in self.sensors]
+            except:
+                env_param.num_errors[0] += 1
+                print(f"sensor step error in {self.id}. Total errors: {env_param.num_errors[0]}")
 
     def check_status(self):
         """
@@ -436,11 +450,12 @@ class ObjectBase:
                 if self.check_collision(obj):
                     collision_flags.append(True)
                     self.collision_obj.append(obj)
+                    obj.collision_flag = True
                     
                     if self.role == "robot":
                         if not self.collision_flag:
                             env_param.logger.warning(
-                                f"{self.name} collided with {obj.name} at state {np.round(self.state[:3, 0], 2).tolist()}"
+                                f"{self.id} collided with {obj.id} at state {np.round(self.state[:3, 0], 2).tolist()}"
                             )
                 else:
                     collision_flags.append(False)
@@ -573,6 +588,9 @@ class ObjectBase:
 
     def get_lidar_scan(self):
         return self.lidar.get_scan()
+    
+    def get_lidar_custom_scan(self):
+        return self.lidar_custom.get_scan()
 
     def get_lidar_points(self):
         return self.lidar.get_points()
@@ -706,7 +724,7 @@ class ObjectBase:
         Args:
             geometry: The shapely geometry of the object.
         """
-        self._init_geometry = geometry
+        self._init_geometry = deepcopy(geometry)
 
     def set_random_goal(
         self,
@@ -1079,11 +1097,15 @@ class ObjectBase:
         x = self.state_re[0][0]
         y = self.state_re[1][0]
 
-        theta = (
-            atan2(self.velocity_xy[1, 0], self.velocity_xy[0, 0])
-            if self.kinematics == "omni"
-            else self.state_re[2][0]
-        )
+        # Revert this later
+        theta = kwargs.get("theta", None)
+
+        if theta is None:
+            theta = (
+                atan2(self.velocity_xy[1, 0], self.velocity_xy[0, 0])
+                if self.kinematics == "omni"
+                else self.state_re[2][0]
+            )
 
         arrow = mpl.patches.Arrow(
             x,
@@ -1231,6 +1253,7 @@ class ObjectBase:
         self._state = self._init_state.copy()
         self._goal = self._init_goal.copy()
         self._velocity = self._init_velocity.copy()
+        self._geometry = deepcopy(self._init_geometry)
 
         self.collision_flag = False
         self.arrive_flag = False
@@ -1565,7 +1588,7 @@ class ObjectBase:
             list: The environment objects that are not the self object.
         '''
 
-        return [obj for obj in env_param.objects if self.id != obj.id]
+        return self._external_objects
 
     @property
     def ego_object(self):

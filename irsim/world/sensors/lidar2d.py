@@ -86,6 +86,8 @@ class Lidar2D:
 
         
         """
+        raise NotImplementedError
+
         self.sensor_type = "lidar2d"
 
         self.range_min = range_min

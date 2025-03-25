@@ -1,4 +1,5 @@
 import copy
+from math import log
 from typing import Optional
 import numpy as np
 import torch
@@ -13,6 +14,8 @@ import threading
 from model import ActorCritic
 from env_handler import EnvHandler
 from tqdm import tqdm
+
+from utils import tuple2string
 
 def combined_shape(length, shape=None):
     if shape is None:
@@ -111,8 +114,8 @@ class multi_ppo:
         self.act_dim = self.env.action_space.shape
 
         # Set up optimizers for policy and value function
-        self.pi_optimizer = Adam(self.ac.pi.parameters(), lr=pi_lr)
-        self.vf_optimizer = Adam(self.ac.v.parameters(), lr=vf_lr)
+        self.pi_optimizer = Adam(list(self.ac.pi.parameters()) + list(self.ac.dynamic_input_model.parameters()), lr=pi_lr)
+        self.vf_optimizer = Adam(list(self.ac.pi.parameters()) + list(self.ac.dynamic_input_model.parameters()), lr=vf_lr)
 
         if con_train:
             check_point = torch.load(load_fname)
@@ -155,14 +158,14 @@ class multi_ppo:
         ep_ret_list, ep_len_list = [0] * self.robot_num, [0] * self.robot_num
         ep_ret_list_mean = [[] for _ in range(self.robot_num)]
 
-        for epoch in tqdm(range(self.epoch), desc='Training_epochs'):
-            save_anim = self.render and (epoch % self.render_freq == 0 or epoch == self.epoch) and False
+        for epoch in tqdm(range(self.epoch), desc='Training'):
+
+            save_anim = self.render and (epoch % self.render_freq == 0 or epoch == self.epoch)
             if save_anim:
                 self.env = self.env_handler.get_save_ani_env()
             else:
                 self.env = self.env_handler.get_train_env()
             start_time = time.time()
-            print('current epoch', epoch)
 
             recieved_goal_reward = [False] * self.robot_num
 
@@ -184,7 +187,7 @@ class multi_ppo:
                     v_list.append(v)
                     logp_list.append(logp)
 
-                    cur_vel = np.squeeze(self.env.robot_list[i].velocity)
+                    cur_vel = np.squeeze(self.env.robot_list[i].velocity_xy)
                     abs_action = np.round(a_inc, 2)  + cur_vel
 
                     abs_action = np.round(abs_action, 2)
@@ -245,23 +248,22 @@ class multi_ppo:
                     del self.env_handler.save_ani_env
                     self.delete_animation_buffer("animation_buffer")
 
-            if (epoch % self.save_freq == 0) or (epoch == self.epoch):
+            if (epoch % self.save_freq == 0) or (epoch == self.epoch) and epoch != 0:
                 self.save_model(epoch) 
 
-                if self.save_result and epoch != 0:
                 # if self.save_result:
-                    policy_model = self.save_path + self.save_name+'_'+str(epoch)+'.pt'
-                    # policy_model = self.save_path + self.save_name+'_'+'check_point_'+ str(epoch)+'.pt'
-                    result_path = self.save_path
-                    policy_name = self.save_name+'_'+str(epoch)
-                    save_ani_name = self.save_name + '_' + str(epoch)
-                    thread = threading.Thread(target=self.pt.policy_test, args=('drl', policy_model, policy_name, result_path, '/results.txt', save_ani_name))
-                    thread.start()
+                # # if self.save_result:
+                #     policy_model = self.save_path + self.save_name+'_'+str(epoch)+'.pt'
+                #     # policy_model = self.save_path + self.save_name+'_'+'check_point_'+ str(epoch)+'.pt'
+                #     result_path = self.save_path
+                #     policy_name = self.save_name+'_'+str(epoch)
+                #     save_ani_name = 'test_epoch_' + str(epoch)
+                #     self.pt.policy_test('drl', policy_model, policy_name, result_path, '/results.txt', ani_save_name=save_ani_name)
 
             mean = [round(np.mean(r), 2) for r in ep_ret_list_mean]               
             max_ret = [round(np.max(r), 2) for r in ep_ret_list_mean]   
             min_ret = [round(np.min(r), 2) for r in ep_ret_list_mean]   
-            print('The reward in this epoch: ', 'min', min_ret, 'mean', mean, 'max', max_ret)
+            tqdm.write(tuple2string(('The reward in this epoch: ', 'min', min_ret, 'mean', mean, 'max', max_ret)))
             ep_ret_list_mean = [[] for i in range(self.robot_num)]
 
             # update
@@ -269,19 +271,8 @@ class multi_ppo:
             data_list = [buf.get() for buf in self.buf_list]
             self.update(data_list)
     
-            # animate
-            # if epoch == 1:
-            #     self.env.create_animate(self.save_path+'figure/')
-            time_cost = time.time()-start_time 
-            estimated_time_remain = time_cost * (self.epoch - epoch)
-            # convert this to hours - minutes - seconds format
-            hours, rem = divmod(estimated_time_remain, 3600)
-            minutes, seconds = divmod(rem, 60)
-            time_remaining_str = f'estimated remain time: {int(hours)} hours {int(minutes)} minutes {int(seconds)} seconds'
-            
-            print('time cost in one epoch', time_cost, 'estimated remain time', time_remaining_str)
-    
     def update(self, data_list):
+        
         randn = np.arange(self.robot_num)
         np.random.shuffle(randn)
         
@@ -294,35 +285,29 @@ class multi_ppo:
             if update_num > self.max_update_num:
                 continue
 
-            iters = max(self.train_pi_iters, self.train_v_iters)
-
-            early_stop_flag = False
-            for i in range(iters):
+            for i in range(self.train_pi_iters):
                 self.pi_optimizer.zero_grad()
-                self.vf_optimizer.zero_grad()
-                loss_pi, pi_info, loss_v, pi_done, v_done = self.compute_loss(i, data, early_stop_flag)
+                loss_pi, pi_info = self.compute_loss_pi(data)
                 kl = pi_info['kl']
+               
                 
                 if kl > self.target_kl:
                     print('Early stopping at step %d due to reaching max kl.'%i)
-                    early_stop_flag = True
-                
-                if pi_done and v_done:
                     break
-                if pi_done:
-                    loss_pi.backward()
-                    self.pi_optimizer.step()
-                if v_done:
-                    loss_v.backward()
-                    self.vf_optimizer.step()
-            
-            print(i, ' iterations')
+                
+                loss_pi.backward()
+                self.pi_optimizer.step()
 
-    def compute_loss(self, current_iter, data, early_stop_flag=False):
-        obs, act, adv, logp_old, ret = data['obs'], data['act'], data['adv'], data['logp'], data['ret']
-        logp_old = logp_old.to(self.device)
-        adv = adv.to(self.device)
-        ret = ret.to(self.device)
+            # Value function learning
+            for i in range(self.train_v_iters):
+                self.vf_optimizer.zero_grad()
+                loss_v = self.compute_loss_v(data)
+                loss_v.backward()
+                self.vf_optimizer.step()
+
+
+    def compute_loss_v(self, data):
+        obs, ret = data['obs'], data['ret']
 
         pro_obs_list = []
         ext_obs_list = []
@@ -332,34 +317,40 @@ class multi_ppo:
         
         obs = (pro_obs_list, ext_obs_list)
         obs = self.ac.get_intermediate_representation(*obs, is_batch=True)
+        
+        ret = ret.to(self.device)
+        return ((self.ac.v(obs) - ret)**2).mean()
 
-        pi, pi_info, loss_v = None, None, None
-        v_done = False
-        pi_done = False
+    def compute_loss_pi(self, data):
+         # Set up function for computing PPO policy loss
+        obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
 
-        if current_iter < self.train_pi_iters and not early_stop_flag:
-            # Policy loss
-            pi, logp = self.ac.pi(obs, act)
-            ratio = torch.exp(logp - logp_old)
-            clip_adv = torch.clamp(ratio, 1-self.clip_ratio, 1+self.clip_ratio) * adv
-            loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
+        pro_obs_list = []
+        ext_obs_list = []
+        for pro_obs, ext_obs, _ in obs:
+            pro_obs_list.append(pro_obs)
+            ext_obs_list.append(ext_obs)
 
-            # Useful extra info
-            approx_kl = (logp_old - logp).mean().item()
-            ent = pi.entropy().mean().item()
-            clipped = ratio.gt(1+self.clip_ratio) | ratio.lt(1-self.clip_ratio)
-            clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
-            pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
-        else:
-            pi_done = True
+        logp_old = logp_old.to(self.device)
+        adv = adv.to(self.device)
 
-        if current_iter < self.train_v_iters:
-            # Value function loss
-            loss_v = ((self.ac.v(obs) - ret)**2).mean()
-        else:
-            v_done = True
+        obs = (pro_obs_list, ext_obs_list)
+        obs = self.ac.get_intermediate_representation(*obs, is_batch=True)
 
-        return loss_pi, pi_info, loss_v, pi_done, v_done
+        # Policy loss
+        pi, logp = self.ac.pi(obs, act)
+        ratio = torch.exp(logp - logp_old)
+        clip_adv = torch.clamp(ratio, 1-self.clip_ratio, 1+self.clip_ratio) * adv
+        loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
+
+        # Useful extra info
+        approx_kl = (logp_old - logp).mean().item()
+        ent = pi.entropy().mean().item()
+        clipped = ratio.gt(1+self.clip_ratio) | ratio.lt(1-self.clip_ratio)
+        clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
+        pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
+
+        return loss_pi, pi_info
 
     def save_model(self, index=0):
        

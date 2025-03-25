@@ -6,8 +6,8 @@ world:
   show_sensor: false
 
 robot:
-  - number: 4
-    distribution: {name: 'circle', radius: 4, center: [5, 5]}  
+  - state: [1, 2, 0]
+    goal: [7, 2, 0]
     kinematics: {name: 'diff'}
     shape: 
       - {name: 'circle', radius: 0.2} 
@@ -16,6 +16,20 @@ robot:
     color: ['royalblue', 'red', 'green', 'orange', 'purple', 'yellow', 'cyan', 'magenta', 'lime', 'pink', 'brown'] 
     arrive_mode: 'position'
     goal_threshold: 0.15
+    arrive_mode: 'position'
     sensors:
       - name: 'lidar2d_custom'
 
+  - state: [1, 1, 0]
+    goal: [8, 1, 0]
+    kinematics: {name: 'diff'}
+    shape: 
+      - {name: 'circle', radius: 0.2} 
+    vel_min: [-1.5, -1.5]
+    vel_max: [1.5, 1.5]
+    color: ['royalblue', 'red', 'green', 'orange', 'purple', 'yellow', 'cyan', 'magenta', 'lime', 'pink', 'brown'] 
+    arrive_mode: 'position'
+    goal_threshold: 0.15
+    arrive_mode: 'position'
+    sensors:
+      - name: 'lidar2d_custom'
